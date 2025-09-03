@@ -57,7 +57,11 @@ def extract_all_features_and_errors(G):
         elif feature_type == "mlp reconstruction error":
             selected_errors.append((layer, ctx_idx))
 
-    return selected_features, selected_errors
+    g_dict = {
+        "feature_nodes": selected_features,
+        "error_nodes": selected_errors
+    }
+    return g_dict
 
 def extract_per_layer_features_and_errors(G):
     """Extract selected_features and selected_errors from the graph, grouped by layer.

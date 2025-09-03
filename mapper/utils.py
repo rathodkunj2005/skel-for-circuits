@@ -21,7 +21,7 @@ def prune_graph_by_one_lens(G, lens, prune_fraction=0.1):
 
 
 
-def prune_graph_by_lens_combination(G, lenses, weights, prune_fraction=0.1):
+def prune_graph_by_lens_combination(G, lenses, weights, prune_fraction=0.97):
 
     # scores = {node: lens(G, node) for node in G.nodes()}
     scores = {}

@@ -187,16 +187,17 @@ def main():
         weights_data = json.load(f)
         best_weights = weights_data["best_weights"]
 
-
-    refined_weights_list = refine_weights(best_weights[0], best_weights[1], best_weights[2], max_combinations=10, r=0.1)
+    max_combinations = 0
+    refined_weights_list = refine_weights(best_weights[0], best_weights[1], best_weights[2], max_combinations=max_combinations, r=0.1)
     print(refined_weights_list)
 
-    # Perform grid search
-    print("Starting grid search...")
-    trainer = Trainer(test_graphs, lenses, args.num_intervals, args.overlap, args.lambda_param)
-    best_weights, best_metrics, all_results = trainer.grid_search(refined_weights_list)
-    # best_weights, best_score = [0.2, 0.4, 0.4], 0.912
-    
+    if max_combinations > 0:
+        # Perform grid search
+        print("Starting grid search...")
+        trainer = Trainer(test_graphs, lenses, args.num_intervals, args.overlap, args.lambda_param)
+        best_weights, best_metrics, all_results = trainer.grid_search(refined_weights_list)
+        # best_weights, best_score = [0.2, 0.4, 0.4], 0.912
+
     # Apply to each test graph
     print("Generating skeletons...")
     for i, graph in enumerate(test_graphs):
