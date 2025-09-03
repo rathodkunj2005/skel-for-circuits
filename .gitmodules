@@ -1,0 +1,3 @@
+[submodule "external/Faithfulness"]
+	path = external/Faithfulness
+	url = git@github.com:Brafied/Faithfulness.git
