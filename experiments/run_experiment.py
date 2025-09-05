@@ -191,7 +191,7 @@ def main():
     refined_weights_list = refine_weights(best_weights[0], best_weights[1], best_weights[2], max_combinations=APPLICATION_SEARCH_SIZE, r=0.1)
     print(refined_weights_list)
 
-    if max_combinations > 0:
+    if APPLICATION_SEARCH_SIZE > 0:
         # Perform grid search
         print("Starting grid search...")
         trainer = Trainer(test_graphs, lenses, args.num_intervals, args.overlap, args.lambda_param)
