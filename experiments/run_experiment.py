@@ -3,7 +3,7 @@ import json
 import numpy as np
 import math
 import argparse
-from data.loaders import load_graph, load_all_graphs, save_skeleton_json
+from data.loaders import load_graph, load_all_graphs, save_skeleton_json, save_graph_with_qparams
 from apply.apply_pipeline import apply_trained_weights
 from lenses.depth import DepthLens
 from lenses.supernode import SupernodeLens
@@ -15,7 +15,7 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 GRID_STEPS = 5
-
+APPLICATION_SEARCH_SIZE = 1
 
 def build_weights(start, end):
     # Generate weight grid (normalized to sum to 1)
@@ -188,7 +188,7 @@ def main():
         best_weights = weights_data["best_weights"]
 
 
-    refined_weights_list = refine_weights(best_weights[0], best_weights[1], best_weights[2], max_combinations=10, r=0.1)
+    refined_weights_list = refine_weights(best_weights[0], best_weights[1], best_weights[2], max_combinations=APPLICATION_SEARCH_SIZE, r=0.1)
     print(refined_weights_list)
 
     # Perform grid search
@@ -215,6 +215,7 @@ def main():
         base_name = os.path.splitext(os.path.basename(args.graph))[0]
         output_path = os.path.join("data/outputs/", f"{base_name}_skeleton.json")
         save_skeleton_json(skeleton, graph, output_path)
+        save_graph_with_qparams(skeleton, graph, output_path)
         print(f"Saved skeleton to {output_path}")
     
     print("\n=== PROCESS COMPLETE ===")
