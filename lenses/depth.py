@@ -1,6 +1,6 @@
 import networkx as nx
 from .base import LensFunction
-from data.loaders import get_output_nodes
+from data.loaders import get_output_nodes, get_input_nodes
 
 class DepthLens(LensFunction):
     def __init__(self, reverse=True):
@@ -8,7 +8,8 @@ class DepthLens(LensFunction):
         
     def __call__(self, G, node):
         output_nodes = get_output_nodes(G)
-        if node in output_nodes:
+        input_nodes = get_input_nodes(G)
+        if node in output_nodes or node in input_nodes:
             return 0.0
         
         # Reverse graph for distance to output

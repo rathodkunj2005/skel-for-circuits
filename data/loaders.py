@@ -57,7 +57,11 @@ def extract_all_features_and_errors(G):
         elif feature_type == "mlp reconstruction error":
             selected_errors.append((layer, ctx_idx))
 
-    return {"feature_nodes": selected_features, "error_nodes": selected_errors}
+    g_dict = {
+        "feature_nodes": selected_features,
+        "error_nodes": selected_errors
+    }
+    return g_dict
 
 def extract_per_layer_features_and_errors(G):
     """Extract selected_features and selected_errors from the graph, grouped by layer.
@@ -125,6 +129,59 @@ def get_output_nodes(G):
             output_nodes.append(node)
 
     return output_nodes
+
+
+def get_input_nodes(G):
+    """Identify input nodes based on node_id pattern."""
+    input_nodes = []
+    
+    for node in G.nodes():
+        try:
+            prefix = node.split('_')[0]
+        except:
+            prefix = -1
+        if prefix == "E":
+            input_nodes.append(node)
+    
+    return input_nodes
+
+
+
+# def save_skeleton_json(skeleton_graph, file_path):
+#     """
+#     Save skeleton graph to JSON format.
+    
+#     Args:
+#         skeleton_graph: NetworkX graph from MapperPipeline
+#         file_path: Path to save JSON file
+#     """
+#     # Prepare nodes
+#     nodes_data = []
+#     for node_id, data in skeleton_graph.nodes(data=True):
+#         nodes_data.append({
+#             "cluster_id": str(node_id),
+#             "nodes": data.get('nodes', []),
+#             "size": len(data.get('nodes', []))
+#         })
+    
+#     # Prepare links
+#     links_data = []
+#     for u, v, data in skeleton_graph.edges(data=True):
+#         links_data.append({
+#             "source": str(u),
+#             "target": str(v),
+#             "weight": data.get('weight', 1.0)
+#         })
+    
+#     # Create output structure
+#     output = {
+#         "nodes": nodes_data,
+#         "links": links_data
+#     }
+    
+#     # Save to file
+#     with open(file_path, 'w') as f:
+#         json.dump(output, f, indent=2)
 
 
 
