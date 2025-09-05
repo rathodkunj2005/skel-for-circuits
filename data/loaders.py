@@ -2,42 +2,6 @@ import json
 import os
 import networkx as nx
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
-
-def get_first_predicted_token(model_name, prompt):
-    """
-    Get the first token predicted by an LLM given a prompt.
-    
-    Args:
-        model_name (str): Name of the Hugging Face model (e.g., 'gpt2', 'microsoft/DialoGPT-medium')
-        prompt (str): Input text prompt
-        
-    Returns:
-        str: The first predicted token as a string
-    """
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
-    
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
-    
-    with torch.no_grad():
-        outputs = model(**inputs)
-        logits = outputs.logits
-    
-    next_token_logits = logits[0, -1, :]
-    predicted_token_id = torch.argmax(next_token_logits).item()
-    
-    predicted_token = tokenizer.decode(predicted_token_id)
-    
-    return predicted_token, predicted_token_id
-
-
-def load_graph_from_prompt(model, prompt, first_pred_tok):
-    pass
-
 
 def load_graph(file_path):
     """Load graph from JSON file and convert to NetworkX DiGraph."""

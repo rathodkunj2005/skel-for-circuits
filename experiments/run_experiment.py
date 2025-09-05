@@ -73,7 +73,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Apply trained mapper skeletonization to a graph"
     )
-    
+
     parser.add_argument("--prompt", required=True, type=str, 
                         help="input prompt")    
     parser.add_argument("--desired_logit_prob", type=float, default=0.95,
@@ -127,22 +127,6 @@ def main():
     transcoder_name = "gemma"
     model = ReplacementModel.from_pretrained(model_name, transcoder_name, device='cuda', dtype=torch.bfloat16)
     
-    offload = 'cpu'
-    verbose = True
-
-    graph = attribute(
-        prompt=args.prompt,
-        model=model,
-        max_n_logits=args.max_n_logits,
-        desired_logit_prob=args.desired_logit_prob,
-        batch_size=args.graph_batch_size,
-        max_feature_nodes=args.max_feature_nodes,
-        offload=offload,
-        verbose=verbose
-    )
-
-    answer, answer_idx = get_first_predicted_token(model_name, args.prompt)
-
 
 
     # ----------------------------
