@@ -21,15 +21,20 @@ def prune_graph_by_one_lens(G, lens, prune_fraction=0.1):
 
 
 
-def prune_graph_by_lens_combination(G, lenses, weights, prune_fraction=0.1):
+def prune_graph_by_lens_combination(G, lenses, weights, prune_fraction=0.9):
 
     # scores = {node: lens(G, node) for node in G.nodes()}
     scores = {}
+    # for node in G.nodes():
+    #     combined = 0.0
+    #     for lens, weight in zip(lenses, weights):
+    #         combined += weight * lens(G, node)
+    #     scores[node] = combined
+    
+    # lenses are depth, supernode, importance
     for node in G.nodes():
-        combined = 0.0
-        for lens, weight in zip(lenses, weights):
-            combined += weight * lens(G, node)
-        scores[node] = combined
+        scores[node] = 1/(1/lenses[-1](G, node) * lenses[1](G, node))
+
     
     # Determine threshold
     n_remove = int(len(scores) * prune_fraction)

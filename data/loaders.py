@@ -57,7 +57,7 @@ def extract_all_features_and_errors(G):
         elif feature_type == "mlp reconstruction error":
             selected_errors.append((layer, ctx_idx))
 
-    return selected_features, selected_errors
+    return {"feature_nodes": selected_features, "error_nodes": selected_errors}
 
 def extract_per_layer_features_and_errors(G):
     """Extract selected_features and selected_errors from the graph, grouped by layer.
@@ -127,43 +127,6 @@ def get_output_nodes(G):
     return output_nodes
 
 
-# def save_skeleton_json(skeleton_graph, file_path):
-#     """
-#     Save skeleton graph to JSON format.
-    
-#     Args:
-#         skeleton_graph: NetworkX graph from MapperPipeline
-#         file_path: Path to save JSON file
-#     """
-#     # Prepare nodes
-#     nodes_data = []
-#     for node_id, data in skeleton_graph.nodes(data=True):
-#         nodes_data.append({
-#             "cluster_id": str(node_id),
-#             "nodes": data.get('nodes', []),
-#             "size": len(data.get('nodes', []))
-#         })
-    
-#     # Prepare links
-#     links_data = []
-#     for u, v, data in skeleton_graph.edges(data=True):
-#         links_data.append({
-#             "source": str(u),
-#             "target": str(v),
-#             "weight": data.get('weight', 1.0)
-#         })
-    
-#     # Create output structure
-#     output = {
-#         "nodes": nodes_data,
-#         "links": links_data
-#     }
-    
-#     # Save to file
-#     with open(file_path, 'w') as f:
-#         json.dump(output, f, indent=2)
-
-
 
 def save_skeleton_json(skeleton_graph, initial_graph, file_path):
     """
@@ -225,4 +188,66 @@ def save_skeleton_json(skeleton_graph, initial_graph, file_path):
 
     # Save to file
     with open(file_path, 'w') as f:
+        json.dump(output, f, indent=2)
+
+
+def save_graph_with_qparams(skeleton_graph, initial_graph, file_path):
+    """
+    Save graph in new format where the full initial graph is kept, and the skeleton
+    contributes to 'qParams' with pinnedIds and supernodes.
+
+    Args:
+        skeleton_graph: NetworkX graph (clusters as nodes, with optional 'label' attribute)
+        initial_graph: Original NetworkX graph with all node connections and attributes
+        file_path: Path to save JSON file
+    """
+
+    # Collect pinnedIds = all nodes that belong to skeleton clusters
+    pinned_ids = []
+    supernodes = []
+
+    for cluster_id, data in skeleton_graph.nodes(data=True):
+        cluster_nodes = data.get("nodes", [])
+        pinned_ids.extend(cluster_nodes)
+
+        # Use cluster_id or "label" as the cluster label
+        cluster_label = data.get("label", str(cluster_id))
+
+        # Each supernode is a list: [label, node1, node2, ...]
+        supernodes.append([cluster_label] + cluster_nodes)
+
+    # Build qParams
+    qparams = {
+        "pinnedIds": pinned_ids,
+        "supernodes": supernodes,
+        "linkType": "both",
+        "clickedId": "",
+        "sg_pos": ""
+    }
+
+    # Build full node list from initial_graph
+    nodes_data = []
+    for node_id, attrs in initial_graph.nodes(data=True):
+        node_entry = dict(attrs)
+        node_entry["id"] = node_id
+        nodes_data.append(node_entry)
+
+    # Build full edge list from initial_graph
+    links_data = []
+    for u, v, attrs in initial_graph.edges(data=True):
+        links_data.append({
+            "source": u,
+            "target": v,
+            "weight": attrs.get("weight", 1.0)
+        })
+
+    # Final JSON structure
+    output = {
+        "qParams": qparams,
+        "nodes": nodes_data,
+        "links": links_data
+    }
+
+    # Save to file
+    with open(file_path, "w") as f:
         json.dump(output, f, indent=2)

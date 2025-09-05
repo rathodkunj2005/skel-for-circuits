@@ -2,6 +2,10 @@ from tqdm import tqdm
 import numpy as np
 from mapper.pipeline import MapperPipeline
 from .metrics import faithfulness_score, minimality_score
+from data.loaders import extract_all_features_and_errors
+
+from circuit_tracer import ReplacementModel, attribute
+import torch
 
 class Trainer:
     def __init__(self, graphs, lenses, n_intervals=10, overlap=0.2, lambda_param=0.5):
@@ -10,6 +14,9 @@ class Trainer:
         self.n_intervals = n_intervals
         self.overlap = overlap
         self.lambda_param = lambda_param
+        model_name = 'google/gemma-2-2b'
+        transcoder_name = "gemma"
+        self.model = ReplacementModel.from_pretrained(model_name, transcoder_name, device='cuda', dtype=torch.bfloat16)
         
     def objective(self, weights):
         """Evaluate weights on all training graphs."""
@@ -26,7 +33,8 @@ class Trainer:
         for graph in self.graphs:
             skeleton = pipeline(graph)
         
-            faith = faithfulness_score(graph, skeleton)
+            # faith = faithfulness_score(graph, skeleton)
+            faith = faithfulness_score(self.model, extract_all_features_and_errors(skeleton))
             minimal = minimality_score(skeleton)
 
             total_faith += faith
