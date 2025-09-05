@@ -1,6 +1,43 @@
 import json
 import os
 import networkx as nx
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+def get_first_predicted_token(model_name, prompt):
+    """
+    Get the first token predicted by an LLM given a prompt.
+    
+    Args:
+        model_name (str): Name of the Hugging Face model (e.g., 'gpt2', 'microsoft/DialoGPT-medium')
+        prompt (str): Input text prompt
+        
+    Returns:
+        str: The first predicted token as a string
+    """
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name)
+    
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
+    
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs.logits
+    
+    next_token_logits = logits[0, -1, :]
+    predicted_token_id = torch.argmax(next_token_logits).item()
+    
+    predicted_token = tokenizer.decode(predicted_token_id)
+    
+    return predicted_token, predicted_token_id
+
+
+def load_graph_from_prompt(model, prompt, first_pred_tok):
+    pass
+
 
 def load_graph(file_path):
     """Load graph from JSON file and convert to NetworkX DiGraph."""
@@ -35,64 +72,6 @@ def load_graph(file_path):
     print(f"---> Loaded the input graph with {len(G.nodes())} nodes and {len(G.edges())} edges.")
 
     return G
-
-
-def extract_all_features_and_errors(G):
-    """Extract selected_features and selected_errors from the graph.
-    
-    - selected_features: List[(layer, ctx_idx, feature)] for nodes where feature_type == "cross layer transcoder".
-    - selected_errors: List[(layer, ctx_idx)] for nodes where feature_type == "mlp reconstruction error".
-    """
-    selected_features = []
-    selected_errors = []
-
-    for node_id, attrs in G.nodes(data=True):
-        feature_type = attrs.get("feature_type")
-        layer = attrs.get("layer")
-        ctx_idx = attrs.get("ctx_idx")
-
-        if feature_type == "cross layer transcoder":
-            feature = attrs.get("feature")
-            selected_features.append((layer, ctx_idx, feature))
-        elif feature_type == "mlp reconstruction error":
-            selected_errors.append((layer, ctx_idx))
-
-    g_dict = {
-        "feature_nodes": selected_features,
-        "error_nodes": selected_errors
-    }
-    return g_dict
-
-def extract_per_layer_features_and_errors(G):
-    """Extract selected_features and selected_errors from the graph, grouped by layer.
-    
-    Returns:
-        List[Dict]: A list where index == layer number.
-        Each element is a dict with:
-            - 'feature_nodes': [(layer, ctx_idx, feature), ...]
-            - 'error_nodes': [(layer, ctx_idx), ...]
-    """
-    # First, find how many layers exist
-    max_layer = max(attrs["layer"] for _, attrs in G.nodes(data=True))
-
-    # Initialize structure
-    per_layer_data = [
-        {"feature_nodes": [], "error_nodes": []} for _ in range(max_layer + 1)
-    ]
-
-    # Fill in features and errors
-    for node_id, attrs in G.nodes(data=True):
-        feature_type = attrs.get("feature_type")
-        layer = attrs.get("layer")
-        ctx_idx = attrs.get("ctx_idx")
-
-        if feature_type == "cross layer transcoder":
-            feature = attrs.get("feature")
-            per_layer_data[layer]["feature_nodes"].append((layer, ctx_idx, feature))
-        elif feature_type == "mlp reconstruction error":
-            per_layer_data[layer]["error_nodes"].append((layer, ctx_idx))
-
-    return per_layer_data
 
 
 def load_all_graphs(directory):
@@ -146,43 +125,63 @@ def get_input_nodes(G):
     return input_nodes
 
 
+def extract_all_features_and_errors(G):
+    """Extract selected_features and selected_errors from the graph.
+    
+    - selected_features: List[(layer, ctx_idx, feature)] for nodes where feature_type == "cross layer transcoder".
+    - selected_errors: List[(layer, ctx_idx)] for nodes where feature_type == "mlp reconstruction error".
+    """
+    selected_features = []
+    selected_errors = []
 
-# def save_skeleton_json(skeleton_graph, file_path):
-#     """
-#     Save skeleton graph to JSON format.
-    
-#     Args:
-#         skeleton_graph: NetworkX graph from MapperPipeline
-#         file_path: Path to save JSON file
-#     """
-#     # Prepare nodes
-#     nodes_data = []
-#     for node_id, data in skeleton_graph.nodes(data=True):
-#         nodes_data.append({
-#             "cluster_id": str(node_id),
-#             "nodes": data.get('nodes', []),
-#             "size": len(data.get('nodes', []))
-#         })
-    
-#     # Prepare links
-#     links_data = []
-#     for u, v, data in skeleton_graph.edges(data=True):
-#         links_data.append({
-#             "source": str(u),
-#             "target": str(v),
-#             "weight": data.get('weight', 1.0)
-#         })
-    
-#     # Create output structure
-#     output = {
-#         "nodes": nodes_data,
-#         "links": links_data
-#     }
-    
-#     # Save to file
-#     with open(file_path, 'w') as f:
-#         json.dump(output, f, indent=2)
+    for node_id, attrs in G.nodes(data=True):
+        feature_type = attrs.get("feature_type")
+        layer = attrs.get("layer")
+        ctx_idx = attrs.get("ctx_idx")
 
+        if feature_type == "cross layer transcoder":
+            feature = attrs.get("feature")
+            selected_features.append((layer, ctx_idx, feature))
+        elif feature_type == "mlp reconstruction error":
+            selected_errors.append((layer, ctx_idx))
+
+    g_dict = {
+        "feature_nodes": selected_features,
+        "error_nodes": selected_errors
+    }
+    return g_dict
+
+
+def extract_per_layer_features_and_errors(G):
+    """Extract selected_features and selected_errors from the graph, grouped by layer.
+    
+    Returns:
+        List[Dict]: A list where index == layer number.
+        Each element is a dict with:
+            - 'feature_nodes': [(layer, ctx_idx, feature), ...]
+            - 'error_nodes': [(layer, ctx_idx), ...]
+    """
+    # First, find how many layers exist
+    max_layer = max(attrs["layer"] for _, attrs in G.nodes(data=True))
+
+    # Initialize structure
+    per_layer_data = [
+        {"feature_nodes": [], "error_nodes": []} for _ in range(max_layer + 1)
+    ]
+
+    # Fill in features and errors
+    for node_id, attrs in G.nodes(data=True):
+        feature_type = attrs.get("feature_type")
+        layer = attrs.get("layer")
+        ctx_idx = attrs.get("ctx_idx")
+
+        if feature_type == "cross layer transcoder":
+            feature = attrs.get("feature")
+            per_layer_data[layer]["feature_nodes"].append((layer, ctx_idx, feature))
+        elif feature_type == "mlp reconstruction error":
+            per_layer_data[layer]["error_nodes"].append((layer, ctx_idx))
+
+    return per_layer_data
 
 
 def save_skeleton_json(skeleton_graph, initial_graph, file_path):
@@ -308,3 +307,4 @@ def save_graph_with_qparams(skeleton_graph, initial_graph, file_path):
     # Save to file
     with open(file_path, "w") as f:
         json.dump(output, f, indent=2)
+

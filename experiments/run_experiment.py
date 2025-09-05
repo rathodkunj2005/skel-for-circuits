@@ -4,12 +4,15 @@ import numpy as np
 import math
 import argparse
 from data.loaders import load_graph, load_all_graphs, save_skeleton_json, save_graph_with_qparams
+from data.loaders import get_first_predicted_token
 from apply.apply_pipeline import apply_trained_weights
 from lenses.depth import DepthLens
 from lenses.supernode import SupernodeLens
 from lenses.importance import ImportanceLens
 from training.trainer import Trainer
 from mapper.utils import prune_graph_by_lens_combination, prune_graph_by_one_lens
+
+from circuit_tracer import ReplacementModel, attribute
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -70,6 +73,18 @@ def main():
     parser = argparse.ArgumentParser(
         description="Apply trained mapper skeletonization to a graph"
     )
+    
+    parser.add_argument("--prompt", required=True, type=str, 
+                        help="input prompt")    
+    parser.add_argument("--desired_logit_prob", type=float, default=0.95,
+                        help="")
+    parser.add_argument("--max_n_logits", type=int, default=10,
+                        help="")    
+    parser.add_argument("--max_feature_nodes", type=int, default=8192,
+                        help="")    
+    parser.add_argument("--graph_batch_size", type=int, default=256,
+                        help="")    
+                        
     parser.add_argument("--do_pretrain", type=bool, default=False,
                         help="Train the weights for combining lenses")
     parser.add_argument("--graph", required=True,
@@ -84,6 +99,7 @@ def main():
                         help="Combining faithfulness and minimality")
     parser.add_argument("--prune_fraction", type=float, default=0.5,
                         help="Fraction of nodes with lowest importance scores to be remove from the graph")
+
                         
     # parser.add_argument("--weights", required=True,
     #                     help="Path to JSON file with lens weights")
@@ -105,7 +121,30 @@ def main():
         SupernodeLens(),
         ImportanceLens()
     ]
+
+
+    model_name = 'google/gemma-2-2b'
+    transcoder_name = "gemma"
+    model = ReplacementModel.from_pretrained(model_name, transcoder_name, device='cuda', dtype=torch.bfloat16)
     
+    offload = 'cpu'
+    verbose = True
+
+    graph = attribute(
+        prompt=args.prompt,
+        model=model,
+        max_n_logits=args.max_n_logits,
+        desired_logit_prob=args.desired_logit_prob,
+        batch_size=args.graph_batch_size,
+        max_feature_nodes=args.max_feature_nodes,
+        offload=offload,
+        verbose=verbose
+    )
+
+    answer, answer_idx = get_first_predicted_token(model_name, args.prompt)
+
+
+
     # ----------------------------
     # --- PHASE 1: PRE-TRAINING ---
     if args.do_pretrain:
