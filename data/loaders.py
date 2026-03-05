@@ -1,11 +1,19 @@
+import requests
 import json
 import os
 import networkx as nx
+from data.supernode_label import get_umbrella_term
 
-def load_graph(file_path):
-    """Load graph from JSON file and convert to NetworkX DiGraph."""
-    with open(file_path, 'r') as f:
-        data = json.load(f)
+output_nodes_global = []
+ 
+
+def load_graph(graph):
+    """Convert graph to NetworkX DiGraph."""
+    if isinstance(graph, str):
+        with open(graph, 'r') as f:
+            data = json.load(f)
+    else:
+        data = graph
     
     G = nx.DiGraph()
     
@@ -24,8 +32,8 @@ def load_graph(file_path):
                 run_idx=node['run_idx'],
                 reverse_ctx_idx=node['reverse_ctx_idx'],
                 jsNodeId=node['jsNodeId'],
-                influence=node['influence'],
-                activation=node['activation']
+                # influence=node['influence'],
+                # activation=node['activation']
             )
             
     # Add edges
@@ -34,7 +42,126 @@ def load_graph(file_path):
     
     print(f"---> Loaded the input graph with {len(G.nodes())} nodes and {len(G.edges())} edges.")
 
+    
+    for node in G.nodes():
+        feature_type = G.nodes[node]["feature_type"]
+        if "logit" in feature_type.lower():
+            print("LOGIT NODE:", node, G.nodes[node]['token_prob'])
+    t = get_top_logit_node(G)
+    print("TOP LOGIT NODE:", t, G.nodes[t]['token_prob'])
+    
     return G
+
+
+def load_all_graphs(directory):
+    """Load all JSON graphs from a directory."""
+    graphs = []
+    for filename in os.listdir(directory):
+        if filename.endswith('.json'):
+            filepath = os.path.join(directory, filename)
+            graphs.append(load_graph(filepath))
+    return graphs
+
+
+def pin_node_to_input_ratio_manual_graph(graph_file):
+    # use median of vignette to graph node ration
+    # Gemma & Qwen: 0.0265
+    # Haiku: 0.301
+    if "haiku" in graph_file.lower():
+        ratio = 0.301
+    elif "clt" in graph_file.lower():
+        ratio = 0.16375
+    else:
+        ratio = 0.0265
+    
+    with open(graph_file, 'r') as f:
+        data = json.load(f)
+        pin = len(data['qParams']['pinnedIds'])
+        node_count = len(data['nodes'])
+        return pin, round(node_count*ratio)
+    
+    # Older version: get vignette to input token ratio
+    # with open(graph_file, 'r') as f:
+    #     data = json.load(f)
+    # try:
+    #     pin = len(data['qParams']['pinnedIds'])
+    # except:
+    #     pin = 0
+        
+    # try:
+    #     input_node = len(data['metadata']['prompt_tokens'])
+    # except:
+    #     input_node = 0
+        
+    # try:
+    #     return round(pin/input_node, 10), pin
+    # except:
+    #     return 2, pin
+    
+    
+def get_input_nodes(G):
+    """Identify input nodes based on node_id pattern."""
+    input_nodes = []
+    for node in G.nodes():
+        feature_type = G.nodes[node]["feature_type"]
+        if "embedding" in feature_type.lower():
+            input_nodes.append(node)
+    return input_nodes
+    
+
+def get_output_nodes(G):
+    output_nodes = []
+    for node in G.nodes():
+        feature_type = G.nodes[node]["feature_type"]
+        if "logit" in feature_type.lower():
+            output_nodes.append(node)
+            
+    return output_nodes
+
+
+def get_top_logit_node(G):
+    output_nodes = get_output_nodes(G)
+    print("get_top_logit_node | output_nodes:", output_nodes)
+    keep = ''
+    prob = 0.0
+    
+    for ot in output_nodes:
+        try:
+            if G.nodes[ot]['token_prob'] > prob:
+                prob = G.nodes[ot]['token_prob']
+                keep = ot
+        except:
+            pass
+    
+    # print("\t\t\t\t\t\t\t\t\t\t\ttop_logit_node ~~~> ", keep)  
+    return keep
+
+
+def get_layer_wise_nodes(G):
+    layer_wise_nodes = {}
+    for node in G.nodes():
+        try:
+            prefix = int(node.split('_')[0])
+        except:
+            prefix = -1
+            
+        layer_wise_nodes[prefix] = layer_wise_nodes.get(prefix, [])
+        layer_wise_nodes[prefix].append(node)
+    
+    layer_wise_nodes = dict(sorted(layer_wise_nodes.items()))
+    return layer_wise_nodes
+    
+
+def get_incoming_nodes_with_weights(G, target_node):
+    """Get nodes with incoming edges to target node along with edge weights."""
+    incoming_data = []
+    for predecessor in G.predecessors(target_node):
+        weight = G[predecessor][target_node]['weight']
+        incoming_data.append({
+            'node_id': predecessor,
+            'weight': weight
+        })
+    return incoming_data
 
 
 def extract_all_features_and_errors(G):
@@ -51,204 +178,23 @@ def extract_all_features_and_errors(G):
         layer = attrs.get("layer")
         ctx_idx = attrs.get("ctx_idx")
 
-        if feature_type == "cross layer transcoder":
+        if feature_type == "mlp reconstruction error":
+            selected_errors.append((layer, ctx_idx))
+        else: # feature_type == "cross layer transcoder":
             feature = attrs.get("feature")
             selected_features.append((layer, ctx_idx, feature))
-        elif feature_type == "mlp reconstruction error":
-            selected_errors.append((layer, ctx_idx))
+        
 
     g_dict = {
         "feature_nodes": selected_features,
         "error_nodes": selected_errors
     }
+    
+    # print(len(selected_features), len(selected_errors))
     return g_dict
 
-def extract_per_layer_features_and_errors(G):
-    """Extract selected_features and selected_errors from the graph, grouped by layer.
-    
-    Returns:
-        List[Dict]: A list where index == layer number.
-        Each element is a dict with:
-            - 'feature_nodes': [(layer, ctx_idx, feature), ...]
-            - 'error_nodes': [(layer, ctx_idx), ...]
-    """
-    # First, find how many layers exist
-    max_layer = max(attrs["layer"] for _, attrs in G.nodes(data=True))
 
-    # Initialize structure
-    per_layer_data = [
-        {"feature_nodes": [], "error_nodes": []} for _ in range(max_layer + 1)
-    ]
-
-    # Fill in features and errors
-    for node_id, attrs in G.nodes(data=True):
-        feature_type = attrs.get("feature_type")
-        layer = attrs.get("layer")
-        ctx_idx = attrs.get("ctx_idx")
-
-        if feature_type == "cross layer transcoder":
-            feature = attrs.get("feature")
-            per_layer_data[layer]["feature_nodes"].append((layer, ctx_idx, feature))
-        elif feature_type == "mlp reconstruction error":
-            per_layer_data[layer]["error_nodes"].append((layer, ctx_idx))
-
-    return per_layer_data
-
-
-def load_all_graphs(directory):
-    """Load all JSON graphs from a directory."""
-    graphs = []
-    for filename in os.listdir(directory):
-        if filename.endswith('.json'):
-            filepath = os.path.join(directory, filename)
-            graphs.append(load_graph(filepath))
-    return graphs
-
-
-def get_output_nodes(G):
-    """Identify output nodes based on node_id pattern."""
-    output_nodes = []
-    max_prefix = -1
-    
-    # Find max prefix
-    for node in G.nodes():
-        try:
-            prefix = int(node.split('_')[0])
-        except:
-            prefix = -1
-        if prefix > max_prefix:
-            max_prefix = prefix
-    
-    # Add nodes with max prefix
-    for node in G.nodes():
-        try:
-            prefix = int(node.split('_')[0])
-        except:
-            prefix = -1
-        if prefix == max_prefix:
-            output_nodes.append(node)
-
-    return output_nodes
-
-
-def get_input_nodes(G):
-    """Identify input nodes based on node_id pattern."""
-    input_nodes = []
-    
-    for node in G.nodes():
-        try:
-            prefix = node.split('_')[0]
-        except:
-            prefix = -1
-        if prefix == "E":
-            input_nodes.append(node)
-    
-    return input_nodes
-
-
-
-# def save_skeleton_json(skeleton_graph, file_path):
-#     """
-#     Save skeleton graph to JSON format.
-    
-#     Args:
-#         skeleton_graph: NetworkX graph from MapperPipeline
-#         file_path: Path to save JSON file
-#     """
-#     # Prepare nodes
-#     nodes_data = []
-#     for node_id, data in skeleton_graph.nodes(data=True):
-#         nodes_data.append({
-#             "cluster_id": str(node_id),
-#             "nodes": data.get('nodes', []),
-#             "size": len(data.get('nodes', []))
-#         })
-    
-#     # Prepare links
-#     links_data = []
-#     for u, v, data in skeleton_graph.edges(data=True):
-#         links_data.append({
-#             "source": str(u),
-#             "target": str(v),
-#             "weight": data.get('weight', 1.0)
-#         })
-    
-#     # Create output structure
-#     output = {
-#         "nodes": nodes_data,
-#         "links": links_data
-#     }
-    
-#     # Save to file
-#     with open(file_path, 'w') as f:
-#         json.dump(output, f, indent=2)
-
-
-
-def save_skeleton_json(skeleton_graph, initial_graph, file_path):
-    """
-    Save skeleton graph to JSON format, including internal connections within clusters
-    and all node attributes from the original graph.
-    
-    Args:
-        skeleton_graph: NetworkX graph from MapperPipeline (clusters as nodes)
-        initial_graph: Original NetworkX graph with all node connections and attributes
-        file_path: Path to save JSON file
-    """
-    nodes_data = []
-
-    for cluster_id, data in skeleton_graph.nodes(data=True):
-        cluster_nodes = data.get('nodes', [])
-
-        # Prepare node data including all attributes
-        full_nodes_data = []
-        for node_id in cluster_nodes:
-            if node_id in initial_graph.nodes:
-                # Copy all attributes of the node
-                node_attrs = dict(initial_graph.nodes[node_id])
-                node_attrs["node_id"] = node_id  # ensure node_id is included
-                full_nodes_data.append(node_attrs)
-            else:
-                # Fallback if node not found in initial graph
-                full_nodes_data.append({"node_id": node_id})
-
-        # Extract internal edges within the cluster
-        internal_edges = []
-        for u, v, edge_data in initial_graph.subgraph(cluster_nodes).edges(data=True):
-            internal_edges.append({
-                "source": u,
-                "target": v,
-                "weight": edge_data.get('weight', 1.0)
-            })
-
-        nodes_data.append({
-            "cluster_id": str(cluster_id),
-            "nodes": full_nodes_data,
-            "size": len(full_nodes_data),
-            "internal_edges": internal_edges
-        })
-
-    # Prepare skeleton links (between clusters)
-    links_data = []
-    for u, v, data in skeleton_graph.edges(data=True):
-        links_data.append({
-            "source": str(u),
-            "target": str(v),
-            "weight": data.get('weight', 1.0)
-        })
-
-    # Create final JSON structure
-    output = {
-        "nodes": nodes_data,
-        "links": links_data
-    }
-
-    # Save to file
-    with open(file_path, 'w') as f:
-        json.dump(output, f, indent=2)
-
-
-def save_graph_with_qparams(skeleton_graph, initial_graph, file_path):
+def save_graph_with_qparams(skeleton_graph, initial_graph, metadata, file_path, use_closed_source_labeling: bool = True):
     """
     Save graph in new format where the full initial graph is kept, and the skeleton
     contributes to 'qParams' with pinnedIds and supernodes.
@@ -257,28 +203,49 @@ def save_graph_with_qparams(skeleton_graph, initial_graph, file_path):
         skeleton_graph: NetworkX graph (clusters as nodes, with optional 'label' attribute)
         initial_graph: Original NetworkX graph with all node connections and attributes
         file_path: Path to save JSON file
+        use_closed_source_labeling: If True, use the closed-source (OpenAI) model for
+            get_umbrella_term; otherwise use the local open-source model.
     """
 
     # Collect pinnedIds = all nodes that belong to skeleton clusters
     pinned_ids = []
     supernodes = []
 
+    print("--> DATA LAODER/SENDER: Skeleton graph id:", id(skeleton_graph), "Number of clusters:", skeleton_graph.number_of_nodes(), "Initial graph id:", id(initial_graph), "Number of nodes in initial graph:", initial_graph.number_of_nodes())
     for cluster_id, data in skeleton_graph.nodes(data=True):
         cluster_nodes = data.get("nodes", [])
         pinned_ids.extend(cluster_nodes)
 
         # Use cluster_id or "label" as the cluster label
         cluster_label = data.get("label", str(cluster_id))
-
-        # Each supernode is a list: [label, node1, node2, ...]
-        supernodes.append([cluster_label] + cluster_nodes)
-
+        
+        # Each supernode is a list: [ label, node1, node2, ..., noden]
+        # supernodes.append([cluster_label] + cluster_nodes)
+        if len(cluster_nodes) > 1:
+            # If the skeleton node already carries a descriptive label (e.g. from
+            # LLMGroupingPipeline), use it directly and skip the extra LLM call.
+            # Otherwise fall back to the standard get_umbrella_term path.
+            pre_set = data.get("label")
+            if pre_set and pre_set != str(cluster_id) and pre_set != "[unlabeled]":
+                umbrella = pre_set
+            else:
+                # all_labels = [initial_graph.nodes[x]["clerp"] for x in cluster_nodes]
+                all_labels = [initial_graph.nodes[x]["label"] for x in cluster_nodes]
+                # umbrella = get_umbrella_term(all_labels, model="Qwen/Qwen2.5-32B-Instruct")
+                umbrella = get_umbrella_term(all_labels, use_closed_source=use_closed_source_labeling)
+            supernodes.append([umbrella] + cluster_nodes)
+        elif cluster_nodes[0] != '':
+            # supernodes.append([initial_graph.nodes[cluster_nodes[0]]["clerp"]] + cluster_nodes)
+            supernodes.append([initial_graph.nodes[cluster_nodes[0]]["label"]] + cluster_nodes)
+        else:
+            print("Empty cluster:", cluster_nodes)
+            
     # Build qParams
     qparams = {
-        "pinnedIds": pinned_ids,
-        "supernodes": supernodes,
         "linkType": "both",
+        "pinnedIds": pinned_ids,
         "clickedId": "",
+        "supernodes": supernodes,
         "sg_pos": ""
     }
 
@@ -286,7 +253,7 @@ def save_graph_with_qparams(skeleton_graph, initial_graph, file_path):
     nodes_data = []
     for node_id, attrs in initial_graph.nodes(data=True):
         node_entry = dict(attrs)
-        node_entry["id"] = node_id
+        node_entry["node_id"] = node_id
         nodes_data.append(node_entry)
 
     # Build full edge list from initial_graph
@@ -300,6 +267,7 @@ def save_graph_with_qparams(skeleton_graph, initial_graph, file_path):
 
     # Final JSON structure
     output = {
+        "metadata": metadata,
         "qParams": qparams,
         "nodes": nodes_data,
         "links": links_data
@@ -307,4 +275,144 @@ def save_graph_with_qparams(skeleton_graph, initial_graph, file_path):
 
     # Save to file
     with open(file_path, "w") as f:
-        json.dump(output, f, indent=2)
+        json.dump(output, f, indent=4)
+    
+    return output
+
+
+def send_subgraph_to_api(graph, displayName=""):
+    
+
+    url = "https://www.neuronpedia.org/api/graph/subgraph/save"
+    # my_key = "sk-np-05sJukY6531bHuEinDGx9K6hqEftfQsWIaTL0BoNnWM0"
+    my_key = "sk-np-PbKa0gIJZ0DMePXpxS7pso5PRexTfTZtNdC0OduMbvg0"
+    
+    slug = graph["metadata"]["slug"]
+    
+    pinnedIds = graph["qParams"]["pinnedIds"]
+    supernodes = graph["qParams"]["supernodes"]
+    pruningThreshold = 1
+    densityThreshold = 1
+    
+    
+    # print("# # # # pinnedIds")
+    # print(pinnedIds)
+    
+    modelId = graph["metadata"]["scan"]
+    node_lookup = {node.get("node_id"): node for node in graph.get("nodes", [])}
+    
+    if "gemma" not in modelId and "qwen" not in modelId: # for Haiku
+        # # # Temp Fix for Haiku
+        new_pinnedIds = []
+        for node in pinnedIds:
+            new_pinnedIds.append(replace_node_id_with_JSid(node, node_lookup))
+        
+        new_supernodes = []
+        for group in supernodes:
+            s = [group[0]]
+            for node in group[1:]:
+                s.append(replace_node_id_with_JSid(node, node_lookup))
+            new_supernodes.append(s)  
+        
+        pinnedIds = new_pinnedIds
+        supernodes = new_supernodes
+        # # # 
+    
+    if displayName == "":
+        displayName = slug + "-" + str(len(pinnedIds)) + "-1D-imp"
+        
+    json_file = {
+        "modelId": modelId,
+        "slug": slug,
+        "displayName": displayName,
+        "pinnedIds": pinnedIds,
+        "supernodes": supernodes,
+        # "pinnedIds": new_pinnedIds,
+        # "supernodes": new_supernodes,
+        "clerps": [],
+        "pruningThreshold": pruningThreshold,
+        "densityThreshold": densityThreshold,
+        "overwriteId": ""
+    }
+
+    # print("++++++++++++++++")
+    # print(json.dumps(json_file, indent=2))
+    # print("++++++++++++++++")
+    
+    x = requests.post(
+        url,
+        headers={
+        "Content-Type": "application/json",
+        "x-api-key": my_key
+        },
+        json=json_file
+    )
+
+    print("\t---> Tried sending a subgraph:", slug + "-" + str(len(pinnedIds)), "to attr. graph:", slug, "display name:", displayName)
+    print(x)
+
+
+def replace_node_id_with_JSid(node_id: str, node_lookup: dict[str, dict]) -> str:
+        """Return the frontend jsNodeId for node_id when available."""
+        node_attrs = node_lookup.get(node_id)
+        if isinstance(node_attrs, dict):
+            js_id = node_attrs.get("jsNodeId") or node_attrs.get("jsnodeid")
+            if js_id:
+                return js_id
+        return node_id
+
+
+def stat_check(d):
+    for filename in os.listdir(d):
+        if filename.endswith(".json"):
+            with open(d+filename) as f:
+                data = json.load(f)
+                orig_pinned_nodes = set(list(data['qParams']['pinnedIds']))
+                # print(f"{filename}\nNode count: {len(data['nodes'])}\t prompt: {len(data['metadata']['prompt_tokens'])}\t circuit: {len(data['qParams']['pinnedIds'])}")
+                supernodes = data['qParams']['supernodes']
+                supernodes_stat = []
+                for s in supernodes:
+                    if len(s) > 1:
+                        supernodes_stat.append(len(s))
+                if len(supernodes_stat) != 0:
+                    print(f"Avg node count in supernodes with >1 node: {sum(supernodes_stat)/len(supernodes_stat)}")
+                    # print(len(supernodes_stat))
+            continue
+        
+            try:
+                out_d = d.replace("sample_graphs", "outputs")
+                filename = filename.replace(".json", "_skeleton.json")
+                print(out_d+filename, end=", ")
+                with open(out_d+filename) as f:
+                    data = json.load(f)
+                    auto_pinned_nodes = set(list(data['qParams']['pinnedIds']))
+                    node_lookup = {node.get('node_id'): node for node in data.get('nodes', [])}
+                    # print(f"{filename}\nNode count: {len(data['nodes'])}\t prompt: {len(data['metadata']['prompt_tokens'])}\t circuit: {len(data['qParams']['pinnedIds'])}")
+                
+                if "Haiku" in out_d:
+                    auto_pinned_nodes_fixed = []
+                    for n in auto_pinned_nodes:
+                        auto_pinned_nodes_fixed.append(replace_node_id_with_JSid(n, node_lookup))
+                
+                auto_pinned_nodes_fixed = set(auto_pinned_nodes_fixed)
+
+                common_nodes = set.intersection(orig_pinned_nodes, auto_pinned_nodes_fixed)
+                print(f"initial: {len(orig_pinned_nodes)}, auto: {len(auto_pinned_nodes)}, intersect: {len(common_nodes)}")
+            except:
+                pass
+            
+
+# print("~~~~~"*20)
+# print("GRAPH STAT CHECK")
+# d = "../data/sample_graphs/Haiku/"
+# stat_check(d)
+# print("~~~~~"*20)
+# d = "../data/sample_graphs/Gemma/"
+# stat_check(d)
+# print("~~~~~"*20)
+# d = "data/sample_graphs/"
+# stat_check(d)
+# print("GRAPH END OF STAT CHECK")
+# print("~~~~~"*20)
+# print()
+# exit()
