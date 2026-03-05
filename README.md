@@ -55,7 +55,21 @@ Model configuration (model names, API key) lives in [graph_skel/data/supernode_l
 ### Lens Functions
 Implemented under [graph_skel/lenses/](graph_skel/lenses/):
 - `SupernodeLens`: sentence-transformer embeddings of node labels, reduced to 1D (PCA). Accepts `use_closed_source_labeling` to control which model is used for re-labeling empty nodes.
-- `TopImpactLens`: backward influence propagation with beam pruning. Used as the pruning scorer in both pipelines.
+- `TopImpactLens`: scores every node by its causal influence on the predicted output token. Used as the pruning scorer in both pipelines.
+
+  **How it works (high level):**
+  1. **Identify sinks.** The top-predicted logit node is the primary target; high-probability alternative logits are also included as contrastive sinks.
+  2. **Signed path sums (reverse-topological DP).** For each sink, the algorithm propagates backwards through the graph, tracking how much *positive* (supporting) and *negative* (suppressing) path mass reaches each node. Edge contributions are normalized by the total incoming weight at each node so that relative share of influence is measured rather than raw magnitude.
+  3. **Sub-scores per node.** Several interpretability-motivated scores are combined:
+     - **Importance** — total positive + negative path mass toward all sinks (weighted by sink probabilities).
+     - **Competition** — how strongly a node supports *alternative* (non-top) logits; high competition nodes may be misleading.
+     - **Suppress-alt** — how strongly a node *suppresses* alternatives, i.e. actively steers toward the top prediction.
+     - **Gateway** — bottleneck nodes whose removal would cut many paths to the sink.
+     - **Dominator** — nodes that lie on *every* path from input embeddings to the sink (topological dominance).
+     - **Group boost** — small bonus when semantically similar nodes cluster together, rewarding coherent circuits.
+  4. **Node-type priors.** A prior multiplier modulates the final score by node type: logit/feature nodes (`1.0`), embedding nodes (`0.5`), error nodes (`0.05`), etc.
+  5. **Final score.** `score = prior × (w_importance · importance + w_competition · competition + …)` using fixed linear weights defined in `VNSWeights`.
+  6. **Selection threshold.** Nodes whose importance score exceeds an absolute minimum (`min_importance_for_selection = 0.035`) are kept; the rest are pruned.
 
 ## Project Structure
 - [graph_skel/data/](graph_skel/data/): graph IO, format helpers, LLM labeling utilities, and save utilities
