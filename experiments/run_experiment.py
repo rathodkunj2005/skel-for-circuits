@@ -14,7 +14,7 @@ from data.loaders import (
 )
 from data.attr_graph import get_attribution_graph
 from lenses.supernode import SupernodeLens
-from mapper.top_impact import TopImpactLens
+from mapper.top_impact import TopImpactScorer
 from mapper.pipeline import MapperPipeline
 from mapper.llm_grouping import LLMGroupingPipeline
 
@@ -27,8 +27,8 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # Builders
 # ----------------------------
 def build_lenses(use_closed_source_labeling: bool = True):
-    """lenses[0] = SupernodeLens (semantic), lenses[1] = TopImpactLens (importance)."""
-    return [SupernodeLens(use_closed_source_labeling=use_closed_source_labeling), TopImpactLens()]
+    """lenses[0] = SupernodeLens (semantic), lenses[1] = TopImpactScorer (node selection)."""
+    return [SupernodeLens(use_closed_source_labeling=use_closed_source_labeling), TopImpactScorer()]
 
 
 def build_pipeline(args, lenses):

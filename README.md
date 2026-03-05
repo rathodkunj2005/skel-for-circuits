@@ -13,7 +13,7 @@ Pruning is implemented in [graph_skel/mapper/utils.py](graph_skel/mapper/utils.p
 
 Current behavior:
 - Removes MLP reconstruction error nodes.
-- Computes a score for every remaining node using **TopImpactLens**.
+- Computes a score for every remaining node using **TopImpactScorer**.
 - Removes nodes with non-positive scores.
 
 ### 2) Supernode construction (grouping)
@@ -22,7 +22,7 @@ Two grouping pipelines are available, selected via `--grouping`:
 
 #### `embedding` (default) — `MapperPipeline`
 Groups nodes using a Mapper-style cover over a 1D lens:
-- **Cover:** Overlapping intervals built from `TopImpactLens` scores.
+- **Cover:** Overlapping intervals built from `TopImpactScorer` scores.
 - **Similarity lens:** `SupernodeLens` (sentence-transformer embeddings, PCA-reduced to 1D) clusters nodes *within* each interval.
 - **Clustering:** Complete-link thresholding (`cluster_1d_dict`) groups nodes whose semantic values lie within a fixed distance.
 
@@ -52,10 +52,11 @@ LLMs are used in **two separate roles**, each independently switchable between c
 
 Model configuration (model names, API key) lives in [graph_skel/data/supernode_label.py](graph_skel/data/supernode_label.py) (`CLOSED_SOURCE_MODEL`, `OPEN_SOURCE_MODEL`, `OPENAI_API_KEY`).
 
-### Lens Functions
-Implemented under [graph_skel/lenses/](graph_skel/lenses/):
-- `SupernodeLens`: sentence-transformer embeddings of node labels, reduced to 1D (PCA). Accepts `use_closed_source_labeling` to control which model is used for re-labeling empty nodes.
-- `TopImpactLens`: scores every node by its causal influence on the predicted output token. Used as the pruning scorer in both pipelines.
+### SupernodeLens
+Implemented in [graph_skel/lenses/supernode.py](graph_skel/lenses/supernode.py). Encodes each node label with a sentence-transformer model, then reduces the embeddings to a single scalar via PCA. This 1D value is used as the clustering coordinate inside `MapperPipeline`. Accepts `use_closed_source_labeling` to control which LLM is used for re-labeling nodes whose label is empty.
+
+### TopImpactScorer
+Implemented in [graph_skel/mapper/top_impact.py](graph_skel/mapper/top_impact.py). Not a lens — a standalone node-selection function that scores every node in the graph by its causal importance for the predicted output token. Used by both pipelines to decide which nodes survive pruning.
 
   **How it works (high level):**
   1. **Identify sinks.** The top-predicted logit node is the primary target; high-probability alternative logits are also included as contrastive sinks.
@@ -73,7 +74,7 @@ Implemented under [graph_skel/lenses/](graph_skel/lenses/):
 
 ## Project Structure
 - [graph_skel/data/](graph_skel/data/): graph IO, format helpers, LLM labeling utilities, and save utilities
-- [graph_skel/lenses/](graph_skel/lenses/): lens functions for pruning and clustering
+- [graph_skel/lenses/](graph_skel/lenses/): `SupernodeLens` (semantic similarity for clustering)
 - [graph_skel/mapper/](graph_skel/mapper/): pruning, embedding-based Mapper pipeline, and LLM-based grouping pipeline
 - [graph_skel/experiments/](graph_skel/experiments/): CLI runner
 - [graph_skel/external/Faithfulness/](graph_skel/external/Faithfulness/): circuit-tracer dependency

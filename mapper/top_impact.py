@@ -123,7 +123,7 @@ class NodeScoreBreakdown:
     score: float
 
 
-class TopImpactLens:
+class TopImpactScorer:
     """
     Vignette node selector for pruned attribution graphs (DAGs).
 
@@ -238,7 +238,7 @@ class TopImpactLens:
                 score=s,
             )
         
-        print("\n------------\n\n\n\nTopImpactLens: Node Score Breakdown:")
+        print("\n------------\n\n\n\nTopImpactScorer: Node Score Breakdown:")
 
         return out
 
@@ -630,7 +630,7 @@ class TopImpactLens:
                 return np.asarray(embeddings, dtype=float)
             except Exception as exc:
                 print(
-                    f"TopImpactLens: falling back to TF-IDF embeddings because '{model_name}' "
+                    f"TopImpactScorer: falling back to TF-IDF embeddings because '{model_name}' "
                     f"failed with error: {exc}"
                 )
 
@@ -646,7 +646,7 @@ class TopImpactLens:
         try:
             self._text_embedding_model = SentenceTransformer(model_name)
         except Exception as exc:
-            print(f"TopImpactLens: unable to load text embedding model '{model_name}': {exc}")
+            print(f"TopImpactScorer: unable to load text embedding model '{model_name}': {exc}")
             self._text_embedding_model = None
         return self._text_embedding_model
 

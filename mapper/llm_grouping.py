@@ -236,7 +236,7 @@ class LLMGroupingPipeline:
     (see the patched `prepare_and_send_json` function in data/loaders.py).
 
     Args:
-        lenses:             [SupernodeLens-compatible, TopImpactLens] — only
+        lenses:             [SupernodeLens-compatible, TopImpactScorer] — only
                             lenses[1] (the pruning lens) is actually used here.
         use_closed_source:  True → OpenAI API; False → local HF model.
         n_groups_hint:      Optional soft hint for number of groups to request.

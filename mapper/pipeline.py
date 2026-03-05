@@ -12,8 +12,8 @@ class MapperPipeline:
             similarity_cluster_threshold=0.3,
         ):
         self.lenses = lenses
-        # lenses[0]: SupernodeLens  (semantic similarity)
-        # lenses[1]: TopImpactLens  (node scorer / pruner)
+        # lenses[0]: SupernodeLens     (semantic similarity)
+        # lenses[1]: TopImpactScorer   (node scorer / pruner)
 
         self.n_intervals = n_intervals
         self.overlap = overlap
@@ -29,7 +29,7 @@ class MapperPipeline:
         lens_values = {}
         print("Pipeline | pruned graph:", G)
         for node in G.nodes():
-            lens_values[node] = self.lenses[1](G, node)  # TopImpactLens score
+            lens_values[node] = self.lenses[1](G, node)  # TopImpactScorer score
             self.semantic_values[node] = self.lenses[0](G, node)  # SupernodeLens value
         return lens_values
     
