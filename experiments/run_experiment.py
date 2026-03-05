@@ -1,267 +1,277 @@
+import re
 import os
 import json
-import numpy as np
-import math
 import argparse
-from data.loaders import load_graph, load_all_graphs, save_skeleton_json, save_graph_with_qparams
-from data.loaders import get_first_predicted_token
-from apply.apply_pipeline import apply_trained_weights
-from lenses.depth import DepthLens
-from lenses.supernode import SupernodeLens
-from lenses.importance import ImportanceLens
-from training.trainer import Trainer
-from mapper.utils import prune_graph_by_lens_combination, prune_graph_by_one_lens
-
-from circuit_tracer import ReplacementModel, attribute
-
 import warnings
+from typing import List, Tuple, Dict, Any
+from pathlib import Path
+
+import numpy as np
+
+from data.loaders import (
+    load_graph, load_all_graphs, save_graph_with_qparams,
+    pin_node_to_input_ratio_manual_graph, send_subgraph_to_api,
+    get_top_logit_node,
+)
+from data.attr_graph import get_attribution_graph
+from lenses.supernode import SupernodeLens
+from mapper.top_impact import TopImpactLens
+from mapper.pipeline import MapperPipeline
+from mapper.llm_grouping import LLMGroupingPipeline
+
+from data.supernode_label import rerun_auto_interpretation
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-GRID_STEPS = 5
-APPLICATION_SEARCH_SIZE = 1
 
-def build_weights(start, end):
-    # Generate weight grid (normalized to sum to 1)
-    weights = np.linspace(start, end, GRID_STEPS)
-    weight_grid = []
+# ----------------------------
+# Builders
+# ----------------------------
+def build_lenses(use_closed_source_labeling: bool = True):
+    """lenses[0] = SupernodeLens (semantic), lenses[1] = TopImpactLens (importance)."""
+    return [SupernodeLens(use_closed_source_labeling=use_closed_source_labeling), TopImpactLens()]
+
+
+def build_pipeline(args, lenses):
+    """Return the appropriate pipeline based on --grouping."""
+    if args.grouping == "llm":
+        print(
+            f"---> Using LLM-based grouping "
+            f"(closed_source_grouping={not args.open_source_grouping}, "
+            f"closed_source_labeling={not args.open_source_labeling}, "
+            f"n_groups_hint={args.n_groups_hint})"
+        )
+        return LLMGroupingPipeline(
+            lenses,
+            use_closed_source=not args.open_source_grouping,
+            use_closed_source_labeling=not args.open_source_labeling,
+            n_groups_hint=args.n_groups_hint if args.n_groups_hint > 0 else None,
+        )
+    print("---> Using embedding-based grouping (MapperPipeline)")
+    return MapperPipeline(lenses)
+
+
+
+# ----------------------------
+# Graph loading / building
+# ----------------------------
+def get_json_files_from_directory(directory: str) -> List[str]:
+    """Return sorted list of .json file paths in directory."""
+    dir_path = Path(directory)
+    if not dir_path.is_dir():
+        raise ValueError(f"Not a directory: {directory}")
+
+    json_files = sorted([str(f) for f in dir_path.glob("*.json")])
+    if not json_files:
+        raise ValueError(f"No JSON files found in directory: {directory}")
+
+    return json_files
+
+
+def load_graph_info_from_file(graph_path: str) -> Tuple[Any, str, str, Dict[str, Any]]:
+    """Load graph and extract prompt, answer, metadata from JSON file."""
+    graph = load_graph(graph_path)
+    file_data = json.load(open(graph_path, "r"))
+
+    prompt = file_data.get("metadata", {}).get("prompt", "")
+    answer_node = get_top_logit_node(graph)
+    print(graph_path)
+    try:
+        answer = graph.nodes[answer_node]["clerp"].split('"')[1]
+    except Exception:
+        answer = "none"
+        print("Main Run | not typical logit clerp:", answer_node)
+    metadata = file_data.get("metadata", {})
+
+    return graph, prompt, answer, metadata
+
+
+# ----------------------------
+# Graph loading / building
+# ----------------------------
+def load_test_graphs_and_answer(args, repl_model, model_name):
+    """Return (test_graphs, prompts, answers, metadatas).
     
-    for w1 in weights:
-        for w2 in weights:
-            for w3 in weights:
-                total = w1 + w2 + w3
-                if total > 0:  # Avoid division by zero
-                    normalized = [w1/total, w2/total, w3/total]
-                    if normalized not in weight_grid:
-                        weight_grid.append(normalized)
-    return weight_grid
+    - If --graph_dir provided: load all JSONs from directory
+    - If --graph provided: load single graph file
+    - Otherwise: build attribution graph from prompt
+    """
+    print("Loading test graphs...")
 
+    if args.graph_dir:
+        json_files = get_json_files_from_directory(args.graph_dir)
+        print(f"Found {len(json_files)} JSON files in {args.graph_dir}")
 
-def refine_weights(b1, b2, b3, max_combinations, r=0.05):
-    """Refined search around best weights (b1, b2, b3)"""
-    # Adaptive radius based on distance from boundaries
-    radius = r/2 if min(b1, b2, b3) < r or max(b1, b2, b3) > 1-r else r
+        test_graphs, prompts, answers, metadatas = [], [], [], []
+        for json_file in json_files:
+            graph, prompt, answer, metadata = load_graph_info_from_file(json_file)
+            test_graphs.append(graph)
+            prompts.append(prompt)
+            answers.append(answer)
+            metadatas.append(metadata)
 
-    steps = int(max_combinations ** (1/3)) + 1
-    
-    # Generate grid around best point
-    ranges = [np.linspace(max(0, b - radius), min(1, b + radius), steps) 
-              for b in [b1, b2, b3]]
-    
-    # Create normalized combinations
-    combinations = []
-    for w1 in ranges[0]:
-        for w2 in ranges[1]:
-            for w3 in ranges[2]:
-                total = w1 + w2 + w3
-                if total > 0:
-                    combinations.append([w1/total, w2/total, w3/total])
-    
-    # Remove duplicates and limit to max_combinations
-    unique = []
-    for combo in combinations:
-        if not any(all(abs(a-b) < 1e-6 for a, b in zip(combo, existing)) 
-                  for existing in unique):
-            unique.append(combo)
-            if len(unique) >= max_combinations:
-                break
-    
-    return unique
+        return test_graphs, prompts, answers, metadatas
 
+    if args.graph != "":
+        graph, prompt, answer, metadata = load_graph_info_from_file(args.graph)
+        return [graph], [prompt], [answer], [metadata]
 
-def main():
-
-    parser = argparse.ArgumentParser(
-        description="Apply trained mapper skeletonization to a graph"
+    # Build attribution graph from prompt
+    pruned_g, answer, answer_idx = get_attribution_graph(
+        repl_model,
+        model_name,
+        args.prompt,
+        args.max_n_logits,
+        args.desired_logit_prob,
+        args.graph_batch_size,
+        args.max_feature_nodes,
+        args.node_threshold,
+        args.edge_threshold,
     )
+    pruned_g = json.loads(pruned_g)
+    metadata = pruned_g["metadata"]
+    test_graphs = [load_graph(pruned_g)]
+    return test_graphs, [args.prompt], [answer], [metadata]
 
-    parser.add_argument("--prompt", required=True, type=str, 
-                        help="input prompt")    
-    parser.add_argument("--desired_logit_prob", type=float, default=0.95,
-                        help="")
-    parser.add_argument("--max_n_logits", type=int, default=10,
-                        help="")    
-    parser.add_argument("--max_feature_nodes", type=int, default=8192,
-                        help="")    
-    parser.add_argument("--graph_batch_size", type=int, default=256,
-                        help="")    
-                        
-    parser.add_argument("--do_pretrain", type=bool, default=False,
-                        help="Train the weights for combining lenses")
-    parser.add_argument("--graph", required=True,
-                        help="Path to input graph JSON")
-    parser.add_argument("--train_data_dir", type=str, 
-                        help="Path to graph JSONs for training the weights")    
-    parser.add_argument("--num_intervals", type=int, default=8,
-                        help="Number of intervals in cover")
-    parser.add_argument("--overlap", type=float, default=0.2,
-                        help="Overlap fraction in cover")
-    parser.add_argument("--lambda_param", type=float, default=0.5,
-                        help="Combining faithfulness and minimality")
-    parser.add_argument("--prune_fraction", type=float, default=0.5,
-                        help="Fraction of nodes with lowest importance scores to be remove from the graph")
 
-                        
-    # parser.add_argument("--weights", required=True,
-    #                     help="Path to JSON file with lens weights")
-    # parser.add_argument("--supernode_threshold", type=float, default=0.7,
-    #                     help="Threshold similarity of node labels to be grouped into supernodes.")
-    # parser.add_argument("--cluster_method", choices=["l2","agglo"], default="l2",
-    #                     help="Clustering method for mapper")
-    # parser.add_argument("--out", required=True,
-    #                     help="Path to save skeleton JSON")
+# ----------------------------
+# Output helpers
+# ----------------------------
+def output_paths(args, base_name: str) -> Tuple[str, str]:
+    """Return (output_base_dir, output_path)."""
+    if args.graph_dir:
+        output_base_dir = os.path.join("data/outputs/", Path(args.graph_dir).name)
+    elif "Haiku" in (args.graph or ""):
+        output_base_dir = "data/outputs/Haiku/"
+    else:
+        output_base_dir = "data/outputs/Gemma/"
+
+    os.makedirs(output_base_dir, exist_ok=True)
+    output_path = os.path.join(output_base_dir, f"{base_name}_skeleton.json")
+    return output_base_dir, output_path
+
+
+def process_single_graph(i: int, total: int, graph, args, lenses, pipeline,
+                         prompt: str, answer: str, metadata: Dict[str, Any],
+                         graph_source: str = "",
+                         use_closed_source_labeling: bool = True):
+    """Process a single graph and save skeleton to disk."""
+    print(f"\n{'='*60}")
+    print(f"Processing graph {i+1}/{total}")
+    print(f"{'='*60}")
+
+    if graph_source:
+        base_name = os.path.splitext(os.path.basename(graph_source))[0]
+    elif args.graph != "":
+        base_name = os.path.splitext(os.path.basename(args.graph))[0]
+    else:
+        base_name = re.sub(r"[^a-zA-Z0-9]", "", prompt).lower().replace(" ", "")
+
+    print("GRAPH:", base_name)
+
+    # actual_pin, mean_pinned_count = pin_node_to_input_ratio_manual_graph(
+    #     graph_source if graph_source else args.graph
+    # )
+    # print(f"---> mean_pinned_count: {mean_pinned_count} nodes")
+
+    skeleton = pipeline(graph)
+
+    output_base_dir, output_path = output_paths(args, base_name)
+
+    source_file = graph_source if graph_source else args.graph
+    if source_file:
+        file_meta = json.load(open(source_file))["metadata"]
+        outcome_data = save_graph_with_qparams(skeleton, graph, file_meta, output_path,
+                                               use_closed_source_labeling=use_closed_source_labeling)
+        send_subgraph_to_api(outcome_data, displayName="abs-tresh-035-llm")
+    else:
+        outcome_data = save_graph_with_qparams(skeleton, graph, metadata, output_path,
+                                               use_closed_source_labeling=use_closed_source_labeling)
+
+    print(f"Saved skeleton to {output_path}")
+    return output_base_dir
+
+
+# ----------------------------
+# CLI / main
+# ----------------------------
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Apply mapper skeletonization to an attribution graph"
+    )
+    parser.add_argument("--prompt", required=False, type=str, help="input prompt")
+    parser.add_argument("--desired_logit_prob", type=float, default=0.95)
+    parser.add_argument("--max_n_logits", type=int, default=10)
+    parser.add_argument("--max_feature_nodes", type=int, default=8192)
+    parser.add_argument("--graph_batch_size", type=int, default=256)
+    parser.add_argument("--node_threshold", type=float, default=0.5)
+    parser.add_argument("--edge_threshold", type=float, default=0.8)
+    parser.add_argument("--graph", required=False, default="", help="Path to input graph JSON")
+    parser.add_argument("--graph_dir", required=False, default="",
+                        help="Path to directory containing multiple graph JSON files")
+    parser.add_argument("--grouping", choices=["embedding", "llm"], default="embedding",
+                        help="Grouping method: 'embedding' (PCA-based, default) or 'llm' (LLM-based)")
+    parser.add_argument("--open_source_grouping", action="store_true", default=False,
+                        help="With --grouping llm: use local open-source model for LLM-based grouping instead of OpenAI API")
+    parser.add_argument("--open_source_labeling", action="store_true", default=False,
+                        help="Use local open-source model for rerun_auto_interpretation and get_umbrella_term instead of OpenAI API")
+    parser.add_argument("--n_groups_hint", type=int, default=0,
+                        help="With --grouping llm: optional soft hint for number of groups (0 = no hint)")
 
     args = parser.parse_args()
 
-    if args.do_pretrain and not args.train_data_dir:
-        parser.error("--train_data_dir is required when --do_train is specified.")
-    
-    # Initialize lenses
-    lenses = [
-        DepthLens(),
-        SupernodeLens(),
-        ImportanceLens()
-    ]
+    input_count = sum([
+        bool(args.graph),
+        bool(args.graph_dir),
+        bool(args.prompt and args.prompt.strip()),
+    ])
+
+    if input_count == 0:
+        parser.error("Provide one of: --graph, --graph_dir, or --prompt")
+    if input_count > 1:
+        parser.error("Provide only ONE of: --graph, --graph_dir, or --prompt")
+
+    return args
 
 
-    model_name = 'google/gemma-2-2b'
-    transcoder_name = "gemma"
-    model = ReplacementModel.from_pretrained(model_name, transcoder_name, device='cuda', dtype=torch.bfloat16)
-    
+def main():
+    args = parse_args()
+    lenses = build_lenses(use_closed_source_labeling=not args.open_source_labeling)
 
+    # Only load the replacement model when building a graph from a prompt
+    repl_model = None
+    model_name = "google/gemma-2-2b"
+    if args.prompt:
+        import torch
+        from circuit_tracer import ReplacementModel
+        print("---> Load replacement model")
+        repl_model = ReplacementModel.from_pretrained(
+            model_name, "gemma", device="cuda", dtype=torch.bfloat16
+        )
 
-    # ----------------------------
-    # --- PHASE 1: PRE-TRAINING ---
-    if args.do_pretrain:
-        print("---> Start Training...")
-        # Load training graphs
-        print("Loading training graphs...")
-        train_graphs = load_all_graphs(args.train_data_dir)
-        
-        # print(f"Pruning: Removing {args.prune_fraction*100}% of nodes with lowest importance scores to be remove from the graph...")
-        # pruned_train_graphs = []
-        # for G in train_graphs:
-        #     pruned_train_graphs.append(prune_graph_by_one_lens(G, lenses[-1], args.prune_fraction))
+    pipeline = build_pipeline(args, lenses)
 
-        # print(f"Loaded {len(pruned_train_graphs)} training graphs")
-
-
-        # Train weights
-        # trainer = Trainer(pruned_train_graphs, lenses, args.num_intervals, args.overlap, args.lambda_param)
-        trainer = Trainer(train_graphs, lenses, args.num_intervals, args.overlap, args.lambda_param)
-        
-        weight_grid = build_weights(0, 1)
-
-        print(f"Generated {len(weight_grid)} weight combinations")
-        
-        # Perform grid search
-        print("Starting grid search...")
-
-        # best_weights, best_score = [0.2, 0.4, 0.4], 0.912
-
-        best_weights, best_metrics, all_results = trainer.grid_search(weight_grid)
-
-        # Save results
-        results = {
-            "best_weights": {
-                "DepthLens": best_weights[0],
-                "SupernodeLens": best_weights[1],
-                "ImportanceLens": best_weights[2]
-            },
-            "best_metrics": best_metrics,
-            "all_results": [
-                {"weights": w, "metrics": m} 
-                for w, m in all_results
-            ],
-            "config": {
-                "lambda_param": args.lambda_param,
-                "grid_steps": GRID_STEPS,
-                "num_graphs": len(train_graphs)
-            }
-        }
-        
-        output_path = os.path.join("./training", "training_results.json")
-        with open(output_path, 'w') as f:
-            json.dump(results, f, indent=2)
-        
-        print(f"Saved results to {output_path}")
-        print(f"Best weights: {best_weights}")
-        print(f"Faithfulness: {best_metrics['faithfulness']:.4f}")
-        print(f"Minimality: {best_metrics['minimality']:.4f}")
-        print(f"Composite Score: {best_metrics['score']:.4f}")
-
-
-    # ----------------------------
-    # --- PHASE 2: APPLICATION ---
     print("---> Skeletonizing...")
-                    
-    # Load test graphs
-    print("Loading test graphs...")
-    test_graphs = [load_graph(args.graph)]
+    test_graphs, prompts, answers, metadatas = load_test_graphs_and_answer(args, repl_model, model_name)
     print(f"Loaded {len(test_graphs)} test graphs")
 
-    # print(f"Pruning: Removing {args.prune_fraction*100}% of nodes with lowest importance scores to be remove from the graph...")
-    # pruned_test_graphs = []
-    # for G in test_graphs:
-    #     pruned_test_graphs.append(prune_graph_by_importance(G, args.prune_fraction))
-        
-    weights_path = "training/training_results.json"
-    # Load best weights from training
-    with open(weights_path, 'r') as f:
-        weights_data = json.load(f)
-        best_weights = weights_data["best_weights"]
+    graph_sources = get_json_files_from_directory(args.graph_dir) if args.graph_dir else []
 
-
-    refined_weights_list = refine_weights(best_weights[0], best_weights[1], best_weights[2], max_combinations=APPLICATION_SEARCH_SIZE, r=0.1)
-    print(refined_weights_list)
-
-    if APPLICATION_SEARCH_SIZE > 0:
-        # Perform grid search
-        print("Starting grid search...")
-        trainer = Trainer(test_graphs, lenses, args.num_intervals, args.overlap, args.lambda_param)
-        best_weights, best_metrics, all_results = trainer.grid_search(refined_weights_list)
-        # best_weights, best_score = [0.2, 0.4, 0.4], 0.912
-
-    # Apply to each test graph
-    print("Generating skeletons...")
-    for i, graph in enumerate(test_graphs):
-        print(f"Processing graph {i+1}/{len(test_graphs)}")
-        
-        # Apply mapper pipeline with trained weights
-        skeleton = apply_trained_weights(
-            graph=graph,
-            lenses=lenses,
-            trained_weights=best_weights,
-            n_intervals=10,
-            overlap=0.2
+    last_output_dir = None
+    for i, (graph, prompt, answer, metadata) in enumerate(zip(test_graphs, prompts, answers, metadatas)):
+        graph_source = graph_sources[i] if graph_sources else ""
+        last_output_dir = process_single_graph(
+            i=i, total=len(test_graphs), graph=graph, args=args, lenses=lenses, pipeline=pipeline,
+            prompt=prompt, answer=answer, metadata=metadata, graph_source=graph_source,
+            use_closed_source_labeling=not args.open_source_labeling,
         )
-        
-        # Save skeleton
-        base_name = os.path.splitext(os.path.basename(args.graph))[0]
-        output_path = os.path.join("data/outputs/", f"{base_name}_skeleton.json")
-        save_skeleton_json(skeleton, graph, output_path)
-        save_graph_with_qparams(skeleton, graph, output_path)
-        print(f"Saved skeleton to {output_path}")
-    
-    print("\n=== PROCESS COMPLETE ===")
-    print(f"Generated {len(test_graphs)} skeletons in data/outputs/")
+
+    print("\n" + "=" * 60)
+    print("=== PROCESS COMPLETE ===")
+    print("=" * 60)
+    print(f"Generated {len(test_graphs)} skeletons in {last_output_dir}")
 
 
 if __name__ == "__main__":
     main()
 
-
-## Call Seq.
-# create lenses                                                     lenses/
-# load graphs                                                       data/loaders.py
-# create trainer                                                    training/trainer.py
-#   trainer grid search
-#       trainer objective
-#           create MapperPipeline
-#           call it
-#               compute lenses
-#               get intervals
-#               create new skeleton
-#           get faith an minimal score based on the skeleton
-#           return combined score
-#       decide on the current weights combination
-#       return best weights combination
