@@ -1,6 +1,6 @@
 import networkx as nx
 import numpy as np
-from .utils import create_cover, prune_graph_by_one_lens
+from .utils import create_cover, prune_graph
 from data.loaders import get_top_logit_node
 
 class MapperPipeline:
@@ -22,7 +22,7 @@ class MapperPipeline:
     
     def _prune(self, G):
         print(f"Pipeline | pruning starts with {G}")
-        G = prune_graph_by_one_lens(G, self.lenses[1])
+        G = prune_graph(G, self.lenses[1])
         return G
 
     def _compute_lens(self, G):

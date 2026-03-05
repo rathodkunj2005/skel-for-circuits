@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
 
-from .utils import prune_graph_by_one_lens
+from .utils import prune_graph
 from data.loaders import get_top_logit_node
 from data.supernode_label import (
     generate_text,
@@ -256,7 +256,7 @@ class LLMGroupingPipeline:
 
     def _prune(self, G: nx.Graph) -> nx.Graph:
         print(f"LLMGroupingPipeline | pruning starts with {G}")
-        return prune_graph_by_one_lens(G, self.lenses[1])
+        return prune_graph(G, self.lenses[1])
 
     def __call__(self, G: nx.Graph) -> nx.Graph:
         original_G = G

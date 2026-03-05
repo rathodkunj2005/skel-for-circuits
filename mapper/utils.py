@@ -250,10 +250,10 @@ def select_nodes_until_major_emb(G, lens, model="LiquidAI/LFM2.5-1.2B-Instruct",
 
        
 
-def prune_graph_by_one_lens(G, lens):
-    """Remove error nodes and nodes with non-positive lens score."""
+def prune_graph(G, scorer):
+    """Remove error nodes and nodes with non-positive scorer value."""
     G = remove_error_nodes(G)
-    scores = {node: lens(G, node) for node in G.nodes()}
+    scores = {node: scorer(G, node) for node in G.nodes()}
     nodes_to_remove = [node for node in G.nodes() if scores[node] <= 0]
     G.remove_nodes_from(nodes_to_remove)
     return G

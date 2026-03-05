@@ -10,8 +10,7 @@ import numpy as np
 
 from data.loaders import (
     load_graph, load_all_graphs, save_graph_with_qparams,
-    pin_node_to_input_ratio_manual_graph, send_subgraph_to_api,
-    get_top_logit_node,
+    send_subgraph_to_api, get_top_logit_node,
 )
 from data.attr_graph import get_attribution_graph
 from lenses.supernode import SupernodeLens
@@ -168,11 +167,6 @@ def process_single_graph(i: int, total: int, graph, args, lenses, pipeline,
         base_name = re.sub(r"[^a-zA-Z0-9]", "", prompt).lower().replace(" ", "")
 
     print("GRAPH:", base_name)
-
-    # actual_pin, mean_pinned_count = pin_node_to_input_ratio_manual_graph(
-    #     graph_source if graph_source else args.graph
-    # )
-    # print(f"---> mean_pinned_count: {mean_pinned_count} nodes")
 
     skeleton = pipeline(graph)
 
