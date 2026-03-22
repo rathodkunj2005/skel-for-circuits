@@ -68,10 +68,12 @@ OLLAMA_MODEL=llama3.2:3b
 ### 4. Run on a sample graph
 
 ```bash
-USE_OLLAMA=true python3 -m experiments.run_experiment --graph data/sample_graphs/Gemma/gemma-fact-dallas-austin.json --grouping llm --open_source_grouping --open_source_labeling
+bash run_sample.sh
 ```
 
 Output lands in `data/outputs/`. That's it — no API key, no GPU required for small models.
+
+To run on your own graph: `bash run_sample.sh path/to/your-graph.json`
 
 ---
 
