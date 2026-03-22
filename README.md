@@ -68,11 +68,7 @@ OLLAMA_MODEL=llama3.2:3b
 ### 4. Run on a sample graph
 
 ```bash
-USE_OLLAMA=true python3 -m experiments.run_experiment \
-  --graph data/sample_graphs/Gemma/gemma-fact-dallas-austin.json \
-  --grouping llm \
-  --open_source_grouping \
-  --open_source_labeling
+USE_OLLAMA=true python3 -m experiments.run_experiment --graph data/sample_graphs/Gemma/gemma-fact-dallas-austin.json --grouping llm --open_source_grouping --open_source_labeling
 ```
 
 Output lands in `data/outputs/`. That's it — no API key, no GPU required for small models.
@@ -84,26 +80,20 @@ Output lands in `data/outputs/`. That's it — no API key, no GPU required for s
 ### Embedding-based grouping (no LLM for grouping)
 
 ```bash
-USE_OLLAMA=true python3 -m experiments.run_experiment \
-  --graph data/sample_graphs/Gemma/gemma-fact-dallas-austin.json \
-  --grouping embedding
+USE_OLLAMA=true python3 -m experiments.run_experiment --graph data/sample_graphs/Gemma/gemma-fact-dallas-austin.json --grouping embedding
 ```
 
 ### Run on a whole directory of graphs
 
 ```bash
-USE_OLLAMA=true python3 -m experiments.run_experiment \
-  --graph_dir data/sample_graphs/Gemma/ \
-  --grouping llm --open_source_grouping --open_source_labeling
+USE_OLLAMA=true python3 -m experiments.run_experiment --graph_dir data/sample_graphs/Gemma/ --grouping llm --open_source_grouping --open_source_labeling
 ```
 
 ### Use OpenAI instead of Ollama (requires API key)
 
 ```bash
 export OPENAI_API_KEY=sk-...
-python3 -m experiments.run_experiment \
-  --graph data/sample_graphs/Gemma/gemma-fact-dallas-austin.json \
-  --grouping llm
+python3 -m experiments.run_experiment --graph data/sample_graphs/Gemma/gemma-fact-dallas-austin.json --grouping llm
 ```
 
 ### Build a graph from a prompt (requires `circuit_tracer`)
@@ -111,15 +101,13 @@ python3 -m experiments.run_experiment \
 The `external/Faithfulness` git submodule provides `circuit_tracer`. It requires SSH access to its upstream repo. If you have access:
 
 ```bash
-git submodule update --init --recursive
-pip install -e external/Faithfulness
+git submodule update --init --recursive && pip install -e external/Faithfulness
 ```
 
 Then:
 
 ```bash
-USE_OLLAMA=true python3 -m experiments.run_experiment \
-  --prompt "The capital of France is"
+USE_OLLAMA=true python3 -m experiments.run_experiment --prompt "The capital of France is"
 ```
 
 ---
