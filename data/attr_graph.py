@@ -8,17 +8,22 @@ sys.path.append(str(submodule_path))
 import json
 import time
 import re
-import torch
-from tqdm import tqdm
 import numpy as np
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from circuit_tracer.graph import prune_graph
-from circuit_tracer import attribute
-from circuit_tracer.utils.create_graph_files import (
-    build_model,
-    create_nodes,
-    create_used_nodes_and_edges,
-)
+
+
+def _import_circuit_tracer():
+    """Lazily import circuit_tracer (only needed for --prompt mode)."""
+    import torch
+    from tqdm import tqdm
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    from circuit_tracer.graph import prune_graph
+    from circuit_tracer import attribute
+    from circuit_tracer.utils.create_graph_files import (
+        build_model,
+        create_nodes,
+        create_used_nodes_and_edges,
+    )
+    return prune_graph, attribute, build_model, create_nodes, create_used_nodes_and_edges
 
 
 TLENS_MODEL_ID_TO_NP_MODEL_ID = {
@@ -29,8 +34,11 @@ TLENS_MODEL_ID_TO_NP_MODEL_ID = {
 
 
 def graph_prunings(graph, node_thresholds, edge_threshold=1.0):
+    import torch
+    from tqdm import tqdm
+    prune_graph, _, _, _, _ = _import_circuit_tracer()
     results = []
-    
+
     n_features = len(graph.selected_features)
     n_tokens = graph.n_pos
     n_error_nodes = graph.cfg.n_layers * n_tokens
@@ -64,6 +72,7 @@ def graph_prunings(graph, node_thresholds, edge_threshold=1.0):
 
 
 def metric_fn(logits, answer_idx):
+    import torch
     logits = logits.squeeze()[-1]
     answer_logit = logits[answer_idx]
     top_values, top_indicies = torch.topk(logits, 11)
@@ -73,6 +82,8 @@ def metric_fn(logits, answer_idx):
 
 
 def get_first_predicted_token(model_name, prompt):
+    import torch
+    from transformers import AutoTokenizer, AutoModelForCausalLM
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name)
     
@@ -94,6 +105,9 @@ def get_first_predicted_token(model_name, prompt):
 
 
 def connected_graph_prunings(model, model_name, prompt, graph, node_threshold, edge_threshold, max_n_logits, desired_logit_prob, batch_size, max_feature_nodes):
+    import torch
+    from transformers import AutoTokenizer
+    prune_graph, _, build_model, create_nodes, create_used_nodes_and_edges = _import_circuit_tracer()
     current_time_ms = int(time.time() * 1000)
     
     cleaned_string = re.sub(r'[^a-zA-Z0-9]', '', prompt).lower().replace(" ", "")
@@ -173,6 +187,7 @@ def connected_graph_prunings(model, model_name, prompt, graph, node_threshold, e
 
     
 def get_attribution_graph(model, model_name, prompt, max_n_logits, desired_logit_prob, graph_batch_size, max_feature_nodes, node_threshold, edge_threshold, offload='cpu', verbose=True):
+    _, attribute, _, _, _ = _import_circuit_tracer()
     offload = 'cpu'
     verbose = True
 

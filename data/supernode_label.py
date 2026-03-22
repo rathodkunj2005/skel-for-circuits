@@ -11,17 +11,27 @@ import requests
 import os
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # OpenAI model used when use_closed_source=True
-CLOSED_SOURCE_MODEL = "gpt-5.2-pro-2025-12-11"  
-CLOSED_SOURCE_MODEL = "gpt-5.2-pro"  
+CLOSED_SOURCE_MODEL = "gpt-5.2-pro-2025-12-11"
+CLOSED_SOURCE_MODEL = "gpt-5.2-pro"
 
 OPEN_SOURCE_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
 # OPEN_SOURCE_MODEL = "Qwen/Qwen3-32B"
 # OPEN_SOURCE_MODEL = "Qwen/Qwen2.5-72B-Instruct"
 # OPEN_SOURCE_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 
+# ---------------------------------------------------------------------------
+# Ollama configuration (OpenAI-compatible local API)
+# Set USE_OLLAMA=True to route ALL LLM calls through Ollama instead of
+# OpenAI or HuggingFace. Requires Ollama running at OLLAMA_BASE_URL.
+# ---------------------------------------------------------------------------
+USE_OLLAMA = os.getenv("USE_OLLAMA", "true").lower() in ("1", "true", "yes")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:4b")
+
 # Lazily-initialized singletons (created on first use).
 _openai_client = None
 _hf_generator = None
+_ollama_client = None
 
 
 def _get_openai_client():
@@ -31,6 +41,15 @@ def _get_openai_client():
         _openai_client = OpenAI(api_key=OPENAI_API_KEY)
         print(f"supernode labeling: Initialized OpenAI client (model='{CLOSED_SOURCE_MODEL}').")
     return _openai_client
+
+
+def _get_ollama_client():
+    global _ollama_client
+    if _ollama_client is None:
+        from openai import OpenAI
+        _ollama_client = OpenAI(api_key="ollama", base_url=OLLAMA_BASE_URL)
+        print(f"supernode labeling: Initialized Ollama client (model='{OLLAMA_MODEL}', url='{OLLAMA_BASE_URL}').")
+    return _ollama_client
 
 
 def _get_hf_generator():
@@ -57,9 +76,21 @@ def generate_text(
         temperature: Sampling temperature.
         use_closed_source: If True, use the OpenAI API (CLOSED_SOURCE_MODEL).
                            If False, use the local HuggingFace pipeline (OPEN_SOURCE_MODEL).
+                           If USE_OLLAMA env var is set, Ollama is used regardless.
 
     Returns the generated text string (prompt excluded for HF models).
     """
+    # Ollama takes priority when USE_OLLAMA is enabled
+    if USE_OLLAMA:
+        client = _get_ollama_client()
+        response = client.chat.completions.create(
+            model=OLLAMA_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return response.choices[0].message.content.strip()
+
     if use_closed_source:
         client = _get_openai_client()
         response = client.responses.create(
