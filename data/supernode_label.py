@@ -215,17 +215,179 @@ def format_activating_example(tokens, activations):
     return f"Text: {highlighted_str}\nActivations: {activation_str}"
 
 
-def rerun_auto_interpretation(feature_id, use_closed_source: bool = True):
+def _feature_url(scan: str, feature_id) -> str:
+    """Build the transformer-circuits.pub feature URL for a given scan."""
+    return (
+        f"https://transformer-circuits.pub/2025/attribution-graphs/"
+        f"features/{scan}/{feature_id}.json"
+    )
+
+
+# Known Neuronpedia source-set names keyed by (model_id, feature_type).
+# feature_type values come from the graph node's "feature_type" attribute.
+_NP_SOURCE_SETS = {
+    ("gemma-2-2b", "cross layer transcoder"): "clt-hp",
+    ("gemma-2-2b", "embedding"):              "gemmascope-res-16k",
+    ("gemma-2-2b", ""):                       "gemmascope-res-16k",
+}
+
+
+def _fetch_feature_data_tc(scan: str, feature_id) -> dict | None:
+    """Try transformer-circuits.pub for feature interpretation data."""
+    if not scan:
+        return None
+    url = _feature_url(scan, feature_id)
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"  [tc] Failed to fetch {url}: {e}")
+    return None
+
+
+def _fetch_feature_data_neuronpedia(
+    model_id: str,
+    layer: str,
+    feature_index: int,
+    feature_type: str = "",
+    np_source_set_override: str = "",
+) -> dict | None:
+    """
+    Try the Neuronpedia REST API as a fallback.
+
+    Returns a dict normalised to the same shape as transformer-circuits.pub
+    (keys: top_logits, examples_quantiles) so the caller doesn't need to
+    handle two formats.
+    """
+    # Prefer the override from graph metadata, then look up by model+feature_type
+    source_set = np_source_set_override or _NP_SOURCE_SETS.get((model_id, feature_type))
+    if source_set is None:
+        source_set = _NP_SOURCE_SETS.get((model_id, ""))
+    if source_set is None or not layer:
+        return None
+
+    np_layer = f"{layer}-{source_set}"
+    url = f"https://www.neuronpedia.org/api/feature/{model_id}/{np_layer}/{feature_index}"
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            return None
+        np_data = resp.json()
+        if "error" in np_data:
+            return None
+
+        # If Neuronpedia already has an auto-interp explanation, return it
+        # in a special key so the caller can short-circuit.
+        explanations = np_data.get("explanations") or []
+        existing_label = None
+        if explanations:
+            desc = explanations[0].get("description", "").strip()
+            if desc:
+                existing_label = desc
+
+        # Normalise to transformer-circuits.pub shape
+        top_logits = np_data.get("pos_str") or []
+
+        examples_quantiles = []
+        raw_acts = np_data.get("activations") or []
+        if raw_acts:
+            examples = []
+            for act in raw_acts[:15]:
+                tokens = act.get("tokens", [])
+                values = act.get("values", [])
+                if tokens and values and len(tokens) == len(values):
+                    examples.append({
+                        "tokens": tokens,
+                        "tokens_acts_list": values,
+                    })
+            if examples:
+                examples_quantiles = [{"examples": examples}]
+
+        return {
+            "top_logits": top_logits,
+            "examples_quantiles": examples_quantiles,
+            "_np_existing_label": existing_label,
+        }
+    except Exception as e:
+        print(f"  [np] Failed to fetch {url}: {e}")
+    return None
+
+
+def _parse_feature_index_from_jsNodeId(js_node_id: str) -> int | None:
+    """Extract the feature index from a jsNodeId like '0_44634-0'."""
+    if not js_node_id:
+        return None
+    try:
+        # Format: {layer}_{featureIdx}-{runIdx}
+        parts = js_node_id.split("-")[0].split("_")
+        if len(parts) >= 2:
+            return int(parts[1])
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+def rerun_auto_interpretation(
+    feature_id,
+    use_closed_source: bool = True,
+    scan: str = "",
+    layer: str = "",
+    feature_type: str = "",
+    js_node_id: str = "",
+    np_source_set: str = "",
+):
+    """
+    Fetch feature interpretation data and generate a human-readable label.
+
+    Lookup order:
+      1. transformer-circuits.pub using the graph's ``scan`` identifier.
+      2. Neuronpedia public API (if model/source-set is known).
+      3. Give up → "[unlabeled]".
+
+    Args:
+        feature_id:    Raw feature identifier from the graph node's ``feature``
+                       attribute (used for transformer-circuits.pub lookup).
+        use_closed_source: Route LLM calls through the OpenAI API if True.
+        scan:          Graph-level ``scan`` value (e.g. ``"gemma-2-2b"``,
+                       ``"jackl-circuits-runs-1-4-sofa-v3_0"``).
+        layer:         Node's ``layer`` attribute (e.g. ``"0"``).
+        feature_type:  Node's ``feature_type`` attribute.
+        js_node_id:    Node's ``jsNodeId`` attribute — used to derive the
+                       Neuronpedia feature index.
+        np_source_set: Neuronpedia source-set override from graph metadata
+                       (e.g. ``"clt-hp"``).  Takes priority over the
+                       ``_NP_SOURCE_SETS`` lookup table.
+    """
     if feature_id is None:
         return "[unlabeled]"
-    
-    link = f"https://transformer-circuits.pub/2025/attribution-graphs/features/jackl-circuits-runs-1-4-sofa-v3_0/{feature_id}.json"
+
+    # --- Fetch feature data (try transformer-circuits.pub, then Neuronpedia) ---
+    data = _fetch_feature_data_tc(scan, feature_id)
+
+    if data is None:
+        feature_index = _parse_feature_index_from_jsNodeId(js_node_id)
+        if feature_index is not None and scan:
+            data = _fetch_feature_data_neuronpedia(
+                model_id=scan,
+                layer=layer,
+                feature_index=feature_index,
+                feature_type=feature_type,
+                np_source_set_override=np_source_set,
+            )
+
+    if data is None:
+        print(f"  [rerun_auto_interpretation] No data source for feature {feature_id} (scan={scan})")
+        return "[unlabeled]"
+
+    # If Neuronpedia already has an interpretation, use it directly.
+    np_label = data.get("_np_existing_label")
+    if np_label:
+        print(f"\n~~~~> Using Neuronpedia label for feature {feature_id}: {np_label}\n")
+        return np_label
 
     try:
-        response = requests.get(link)
-        data = response.json()
         toplogits = data.get("top_logits", None)
-        # print(f"\n----> Rerunning interpretation for feature {feature_id} | toplogits: {toplogits}\n")
 
         # Gather top activating examples (up to 15), skipping ones with no activations
         examples_raw = data.get("examples_quantiles", [])
@@ -296,7 +458,6 @@ def rerun_auto_interpretation(feature_id, use_closed_source: bool = True):
 
         def _call_and_parse_interp(p):
             raw = generate_text(p, max_tokens=2048, temperature=1.0, use_closed_source=use_closed_source)
-            # print(f"--DEBUG: RESPONSE:\n{raw}")
             return parse_json_response(raw, "label")
 
         new_label = _call_and_parse_interp(prompt)
@@ -320,9 +481,9 @@ def rerun_auto_interpretation(feature_id, use_closed_source: bool = True):
             return toplogits[0]
         else:
             return "[unlabeled]"
-        
+
     except Exception as e:
-        print(f"Error fetching interpretation for feature {feature_id}: {e}")
+        print(f"Error interpreting feature {feature_id}: {e}")
         return "[unlabeled]"
     
     
@@ -380,10 +541,10 @@ def get_umbrella_term(phrases, use_closed_source: bool = True):
     return umbrella_label
 
 
-def get_feature_top_examples_Haiku(feature_id, top_k=3):
-    link = f"https://transformer-circuits.pub/2025/attribution-graphs/features/jackl-circuits-runs-1-4-sofa-v3_0/{feature_id}.json"
+def get_feature_top_examples_Haiku(feature_id, top_k=3, scan="jackl-circuits-runs-1-4-sofa-v3_0"):
+    link = _feature_url(scan, feature_id)
 
-    response = requests.get(link)
+    response = requests.get(link, timeout=10)
     data = response.json()
     top_activating_examples = data.get("examples_quantiles", [])[0]
     examples = top_activating_examples["examples"]

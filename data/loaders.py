@@ -43,13 +43,21 @@ def load_graph(graph):
     print(f"---> Loaded the input graph with {len(G.nodes())} nodes and {len(G.edges())} edges.")
 
     
+    # Store graph-level metadata so downstream code (e.g. rerun_auto_interpretation)
+    # can look up feature data using the correct model/scan identifier.
+    metadata = data.get("metadata", {})
+    G.graph["scan"] = metadata.get("scan", "")
+    G.graph["neuronpedia_source_set"] = (
+        metadata.get("info", {}).get("neuronpedia_source_set") or ""
+    )
+
     for node in G.nodes():
         feature_type = G.nodes[node]["feature_type"]
         if "logit" in feature_type.lower():
             print("LOGIT NODE:", node, G.nodes[node]['token_prob'])
     t = get_top_logit_node(G)
     print("TOP LOGIT NODE:", t, G.nodes[t]['token_prob'])
-    
+
     return G
 
 

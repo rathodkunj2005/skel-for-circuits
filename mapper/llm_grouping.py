@@ -62,6 +62,8 @@ def _resolve_labels(G: nx.Graph, use_closed_source_labeling: bool = True) -> Dic
         use_closed_source_labeling: Passed to rerun_auto_interpretation — True
             uses the OpenAI API; False uses the local open-source model.
     """
+    scan = G.graph.get("scan", "")
+    np_source_set = G.graph.get("neuronpedia_source_set", "")
     labels: Dict[str, str] = {}
     for node, data in G.nodes(data=True):
         raw = str(data.get('label', '') or '')
@@ -71,7 +73,15 @@ def _resolve_labels(G: nx.Graph, use_closed_source_labeling: bool = True) -> Dic
             data['label'] = cleaned
         else:
             feature_id = data.get('feature', None)
-            label = rerun_auto_interpretation(feature_id, use_closed_source=use_closed_source_labeling) if feature_id else "[unlabeled]"
+            label = rerun_auto_interpretation(
+                feature_id,
+                use_closed_source=use_closed_source_labeling,
+                scan=scan,
+                layer=str(data.get('layer', '')),
+                feature_type=data.get('feature_type', ''),
+                js_node_id=data.get('jsNodeId', ''),
+                np_source_set=np_source_set,
+            ) if feature_id else "[unlabeled]"
             labels[node] = label
             data['label'] = label
     return labels

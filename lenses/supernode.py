@@ -73,6 +73,8 @@ class SupernodeLens(LensFunction):
         # Get the list of labels for all nodes in the graph
         labels: List[str] = []
         print("--> SUPERNODE LENS: Graph id:", id(G), "Number of nodes:", G.number_of_nodes())
+        scan = G.graph.get("scan", "")
+        np_source_set = G.graph.get("neuronpedia_source_set", "")
         for _, data in G.nodes(data=True):
             raw = str(data.get('label', '') or '')
             cleaned1 = raw.replace("Emb: ", "").strip()
@@ -83,7 +85,15 @@ class SupernodeLens(LensFunction):
                 data['label'] = cleaned  # update the graph with the cleaned label
             else:
                 feature_id = data.get('feature', None)
-                label = rerun_auto_interpretation(feature_id, use_closed_source=self.use_closed_source_labeling) if feature_id else "[unlabeled]"
+                label = rerun_auto_interpretation(
+                    feature_id,
+                    use_closed_source=self.use_closed_source_labeling,
+                    scan=scan,
+                    layer=str(data.get('layer', '')),
+                    feature_type=data.get('feature_type', ''),
+                    js_node_id=data.get('jsNodeId', ''),
+                    np_source_set=np_source_set,
+                ) if feature_id else "[unlabeled]"
                 labels.append(label)
                 data['label'] = label  # update the graph with the new label
 
